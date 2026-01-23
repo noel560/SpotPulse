@@ -1,0 +1,6 @@
+rich
+selenium
+webdriver-manager
+yt-dlp
+requests
+beautifulsoup4
