@@ -177,7 +177,7 @@ def extract_tracks_from_playlist(playlist_url):
     console.print("[bold #4da6ff]Launching headless browser...[/bold #4da6ff]")
 
     options = Options()
-    options.add_argument("--headless=new")  # teszteléshez ki
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -205,10 +205,8 @@ def extract_tracks_from_playlist(playlist_url):
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'ELFOGADOM') or contains(text(), 'Accept') or @id='onetrust-accept-btn-handler']"))
             )
             accept_btn.click()
-            #console.print("[green]Cookie-k elfogadva[/green]")
             time.sleep(3)
         except:
-            #console.print("[yellow]Nem volt cookie banner[/yellow]")
             pass
 
         WebDriverWait(driver, 40).until(
@@ -219,13 +217,11 @@ def extract_tracks_from_playlist(playlist_url):
         # Sidebar hide
         try:
             driver.execute_script("var s = document.querySelector('#Desktop_LeftSidebar_Id'); if (s) s.style.display = 'none';")
-            #console.print("[green]Sidebar hid[/green]")
         except:
             pass
 
         time.sleep(3)
 
-        # Jobb header parse (több selector)
         try:
             header_selectors = [
                 'h1[data-testid="entityTitle"]',
@@ -243,27 +239,33 @@ def extract_tracks_from_playlist(playlist_url):
             match = re.search(r'(\d+)', header_text.replace(',', ''))
             if match:
                 expected_total = int(match.group(1))
-                #console.print(f"[yellow]Várható trackek: {expected_total}[/yellow]")
         except:
-            # console.print("[yellow]Header nem olvasható[/yellow]")
             pass
 
-        # console.print("[yellow]Scraping songs...[/yellow]")
-
         no_new_added = 0
-        max_no_new = 15  # gyorsabb stop a végén
+        max_no_new = 15
         pause_time = 7.0
+
+        try:
+            header_elem = driver.find_element(By.CSS_SELECTOR, 'div.eJbkaBhDfq9NfV5_QS8V, div[data-testid="playlist-header-description"], div[class*="encore-text-body-small"]')
+            header_text = header_elem.text.lower()
+            match = re.search(r'(\d+)\s*(dal|song|track|tracks)', header_text)
+            if match:
+                total_songs = int(match.group(1))
+                console.print(f"[dim]Detected playlist size: {total_songs} songs[/dim]")
+        except:
+            console.print("[dim]Playlist size not detected[/dim]")
 
         with Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]{task.description}"),
-            BarColumn(),
-            TextColumn("{task.completed} found"),
-            TimeElapsedColumn(),
-            console=console,
+            BarColumn(bar_width=50, complete_style="#1DB954", finished_style="#1ed760", pulse_style="#1DB954"),
+            TextColumn("{task.completed}/{task.total}"),
+            transient=True,
+            console=console
         ) as progress:
             
-            task = progress.add_task("Extracting songs", total=expected_total or None)
+            task = progress.add_task("Extracting songs", total=total_songs or None)
 
             while True:
                 rows = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="tracklist-row"]')
@@ -288,18 +290,24 @@ def extract_tracks_from_playlist(playlist_url):
                 else:
                     no_new_added = 0
 
-                # Extra kilépés: ha row szám jelentősen csökken (vég jel)
-                if prev_row_count > 40 and current_count < prev_row_count * 0.7:
-                    #console.print("[green]Row szám csökkent → lista vége[/green]")
+                remaining = None
+                if total_songs:
+                    remaining = total_songs - len(tracks)
+
+                if new_added_this_round == 0:
+                    console.print("[dim]No new songs added this round → stopping[/dim]")
                     break
 
-                if no_new_added >= max_no_new or (expected_total > 0 and len(tracks) >= expected_total):
-                    console.print("[bold #2ecc71]Done![/bold #2ecc71]")
+                if total_songs and len(tracks) >= total_songs:
+                    console.print("[bold #2ecc71]All songs extracted[/bold #2ecc71]")
                     break
 
-                prev_row_count = current_count
+                if remaining is not None and new_added_this_round < remaining and no_new_added >= 3:
+                    console.print("[dim]Playlist end reached (partial add)[/dim]")
+                    break
 
-                # Görgetés
+
+                # Scroll
                 driver.execute_script("""
                     var c = document.querySelector('.main-view-container__scroll-node-child, div[data-testid="playlist-tracklist"], main') || document.body;
                     c.scrollTop = c.scrollHeight;
@@ -314,7 +322,6 @@ def extract_tracks_from_playlist(playlist_url):
 
                 time.sleep(pause_time)
 
-        #console.print(f"[bold #2ecc71]Done! {len(tracks)} song extracted[/bold #2ecc71]")
         return tracks
 
     except Exception as e:
