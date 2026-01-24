@@ -14,11 +14,14 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 import time
 from datetime import datetime
 import platform
+import re
 
 console = Console()
 
@@ -170,77 +173,142 @@ def prompt_playlist(current=""):
         input()
 
 def extract_tracks_from_playlist(playlist_url):
-    console.print("[bold #4da6ff]Launching headless browser to scrape playlist... (10-40s depending on length)[/bold #4da6ff]")
+    console.print("[bold #4da6ff]Launching headless browser...[/bold #4da6ff]")
 
     options = Options()
-    options.add_argument("--headless=new")
+    options.add_argument("--headless=new")  # teszteléshez ki
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+    options.add_argument("--window-size=1280,1200")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
     tracks = []
+    seen = set()
+    expected_total = 0
+    prev_row_count = 0
 
     try:
         driver.get(playlist_url)
+        time.sleep(6)
 
-        WebDriverWait(driver, 30).until(
+        # Cookies
+        try:
+            accept_btn = WebDriverWait(driver, 15).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'ELFOGADOM') or contains(text(), 'Accept') or @id='onetrust-accept-btn-handler']"))
+            )
+            accept_btn.click()
+            #console.print("[green]Cookie-k elfogadva[/green]")
+            time.sleep(3)
+        except:
+            #console.print("[yellow]Nem volt cookie banner[/yellow]")
+            pass
+
+        WebDriverWait(driver, 40).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, 'div[data-testid="tracklist-row"]'))
         )
+        console.print("[green]Songs loaded[/green]")
 
-        last_height = driver.execute_script("return document.body.scrollHeight")
-        scroll_attempts = 0
-        max_attempts = 30
+        # Sidebar hide
+        try:
+            driver.execute_script("var s = document.querySelector('#Desktop_LeftSidebar_Id'); if (s) s.style.display = 'none';")
+            #console.print("[green]Sidebar hid[/green]")
+        except:
+            pass
 
-        while scroll_attempts < max_attempts:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(4)
+        time.sleep(3)
 
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                scroll_attempts += 1
-                if scroll_attempts >= 3:
+        # Jobb header parse (több selector)
+        try:
+            header_selectors = [
+                'h1[data-testid="entityTitle"]',
+                'p[data-testid="playlist-subtitle"]',
+                'div[data-testid="playlist-header-description"] span',
+                'div[data-testid="playlist-header"] p'
+            ]
+            header_text = ""
+            for sel in header_selectors:
+                try:
+                    header_text = driver.find_element(By.CSS_SELECTOR, sel).text
                     break
+                except:
+                    continue
+            match = re.search(r'(\d+)', header_text.replace(',', ''))
+            if match:
+                expected_total = int(match.group(1))
+                #console.print(f"[yellow]Várható trackek: {expected_total}[/yellow]")
+        except:
+            # console.print("[yellow]Header nem olvasható[/yellow]")
+            pass
+
+        console.print("[yellow]Scraping songs...[/yellow]")
+
+        no_new_added = 0
+        max_no_new = 15  # gyorsabb stop a végén
+        pause_time = 7.0
+
+        while True:
+            rows = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="tracklist-row"]')
+            current_count = len(rows)
+            new_added_this_round = 0
+
+            for row in rows:
+                try:
+                    title = row.find_element(By.CSS_SELECTOR, 'a[data-testid="internal-track-link"] div[dir="auto"]').text.strip()
+                    artists = ', '.join(a.text.strip() for a in row.find_elements(By.CSS_SELECTOR, 'div[role="gridcell"][aria-colindex="2"] a[href^="/artist/"]') if a.text.strip())
+                    key = (title, artists)
+                    if title and artists and key not in seen:
+                        seen.add(key)
+                        tracks.append({'title': title, 'artists': artists})
+                        new_added_this_round += 1
+                except:
+                    pass
+
+            # console.print(f"[dim]DOM sorok: {current_count:3d} | kinyerve: {len(tracks):4d} | új: {new_added_this_round:2d} | stall: {no_new_added}[/dim]")
+            console.print(f"[dim]Extracting songs: {len(tracks):4d}[/dim]")
+
+            if new_added_this_round == 0:
+                no_new_added += 1
             else:
-                scroll_attempts = 0
-            last_height = new_height
+                no_new_added = 0
 
-        rows = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="tracklist-row"]')
-        console.print(f"[#a0d8ff]Found {len(rows)} track rows in DOM after scrolling.[/#a0d8ff]")
+            # Extra kilépés: ha row szám jelentősen csökken (vég jel)
+            if prev_row_count > 40 and current_count < prev_row_count * 0.7:
+                #console.print("[green]Row szám csökkent → lista vége[/green]")
+                break
 
-        for row in rows:
-            try:
-                title_elem = row.find_element(
-                    By.CSS_SELECTOR, 
-                    'a[data-testid="internal-track-link"] div[dir="auto"]'
-                )
-                title = title_elem.text.strip()
+            if no_new_added >= max_no_new or (expected_total > 0 and len(tracks) >= expected_total):
+                console.print("[bold #2ecc71]Done![/bold #2ecc71]")
+                break
 
-                artist_container = row.find_element(
-                    By.CSS_SELECTOR, 
-                    'div[role="gridcell"][aria-colindex="2"]'
-                )
-                artist_links = artist_container.find_elements(By.CSS_SELECTOR, 'a[href^="/artist/"]')
-                artists = ', '.join([link.text.strip() for link in artist_links if link.text.strip()])
+            prev_row_count = current_count
 
-                if title and artists:
-                    tracks.append({'title': title, 'artists': artists})
-            except Exception as row_err:
-                continue
+            # Görgetés
+            driver.execute_script("""
+                var c = document.querySelector('.main-view-container__scroll-node-child, div[data-testid="playlist-tracklist"], main') || document.body;
+                c.scrollTop = c.scrollHeight;
+            """)
+            time.sleep(0.5)
+            if rows:
+                rows[-1].location_once_scrolled_into_view
+            time.sleep(0.5)
+            driver.execute_script("window.scrollBy(0, -500); window.scrollBy(0, 500);")
+            body = driver.find_element(By.TAG_NAME, 'body')
+            body.send_keys(Keys.END * 3)
 
-        if tracks:
-            console.print(f"[bold #2ecc71]Successfully extracted {len(tracks)} tracks![/bold #2ecc71]")
-        else:
-            console.print("[bold #ff4d4d]No valid tracks parsed – check selectors or try non-headless mode.[/bold #ff4d4d]")
+            time.sleep(pause_time)
 
+        #console.print(f"[bold #2ecc71]Done! {len(tracks)} song extracted[/bold #2ecc71]")
         return tracks
 
     except Exception as e:
-        console.print(f"[bold #ff4d4d]Browser/scraping error: {str(e)}[/bold #ff4d4d]")
-        console.print("[#ff4d4d]Tip: Try without --headless (remove the arg) to see what's happening.[/#ff4d4d]")
+        console.print(f"[bold #ff4d4d]Error: {str(e)}[/bold #ff4d4d]")
         return []
     finally:
         driver.quit()
