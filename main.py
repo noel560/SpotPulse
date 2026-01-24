@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 from rich.panel import Panel
 from rich.align import Align
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 import requests
 from bs4 import BeautifulSoup
 
@@ -247,62 +248,71 @@ def extract_tracks_from_playlist(playlist_url):
             # console.print("[yellow]Header nem olvasható[/yellow]")
             pass
 
-        console.print("[yellow]Scraping songs...[/yellow]")
+        # console.print("[yellow]Scraping songs...[/yellow]")
 
         no_new_added = 0
         max_no_new = 15  # gyorsabb stop a végén
         pause_time = 7.0
 
-        while True:
-            rows = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="tracklist-row"]')
-            current_count = len(rows)
-            new_added_this_round = 0
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed} found"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            
+            task = progress.add_task("Extracting songs", total=expected_total or None)
 
-            for row in rows:
-                try:
-                    title = row.find_element(By.CSS_SELECTOR, 'a[data-testid="internal-track-link"] div[dir="auto"]').text.strip()
-                    artists = ', '.join(a.text.strip() for a in row.find_elements(By.CSS_SELECTOR, 'div[role="gridcell"][aria-colindex="2"] a[href^="/artist/"]') if a.text.strip())
-                    key = (title, artists)
-                    if title and artists and key not in seen:
-                        seen.add(key)
-                        tracks.append({'title': title, 'artists': artists})
-                        new_added_this_round += 1
-                except:
-                    pass
+            while True:
+                rows = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="tracklist-row"]')
+                current_count = len(rows)
+                new_added_this_round = 0
 
-            # console.print(f"[dim]DOM sorok: {current_count:3d} | kinyerve: {len(tracks):4d} | új: {new_added_this_round:2d} | stall: {no_new_added}[/dim]")
-            console.print(f"[dim]Extracting songs: {len(tracks):4d}[/dim]")
+                for row in rows:
+                    try:
+                        title = row.find_element(By.CSS_SELECTOR, 'a[data-testid="internal-track-link"] div[dir="auto"]').text.strip()
+                        artists = ', '.join(a.text.strip() for a in row.find_elements(By.CSS_SELECTOR, 'div[role="gridcell"][aria-colindex="2"] a[href^="/artist/"]') if a.text.strip())
+                        key = (title, artists)
+                        if title and artists and key not in seen:
+                            seen.add(key)
+                            tracks.append({'title': title, 'artists': artists})
+                            new_added_this_round += 1
+                            progress.advance(task, 1)
+                    except:
+                        pass
 
-            if new_added_this_round == 0:
-                no_new_added += 1
-            else:
-                no_new_added = 0
+                if new_added_this_round == 0:
+                    no_new_added += 1
+                else:
+                    no_new_added = 0
 
-            # Extra kilépés: ha row szám jelentősen csökken (vég jel)
-            if prev_row_count > 40 and current_count < prev_row_count * 0.7:
-                #console.print("[green]Row szám csökkent → lista vége[/green]")
-                break
+                # Extra kilépés: ha row szám jelentősen csökken (vég jel)
+                if prev_row_count > 40 and current_count < prev_row_count * 0.7:
+                    #console.print("[green]Row szám csökkent → lista vége[/green]")
+                    break
 
-            if no_new_added >= max_no_new or (expected_total > 0 and len(tracks) >= expected_total):
-                console.print("[bold #2ecc71]Done![/bold #2ecc71]")
-                break
+                if no_new_added >= max_no_new or (expected_total > 0 and len(tracks) >= expected_total):
+                    console.print("[bold #2ecc71]Done![/bold #2ecc71]")
+                    break
 
-            prev_row_count = current_count
+                prev_row_count = current_count
 
-            # Görgetés
-            driver.execute_script("""
-                var c = document.querySelector('.main-view-container__scroll-node-child, div[data-testid="playlist-tracklist"], main') || document.body;
-                c.scrollTop = c.scrollHeight;
-            """)
-            time.sleep(0.5)
-            if rows:
-                rows[-1].location_once_scrolled_into_view
-            time.sleep(0.5)
-            driver.execute_script("window.scrollBy(0, -500); window.scrollBy(0, 500);")
-            body = driver.find_element(By.TAG_NAME, 'body')
-            body.send_keys(Keys.END * 3)
+                # Görgetés
+                driver.execute_script("""
+                    var c = document.querySelector('.main-view-container__scroll-node-child, div[data-testid="playlist-tracklist"], main') || document.body;
+                    c.scrollTop = c.scrollHeight;
+                """)
+                time.sleep(0.5)
+                if rows:
+                    rows[-1].location_once_scrolled_into_view
+                time.sleep(0.5)
+                driver.execute_script("window.scrollBy(0, -500); window.scrollBy(0, 500);")
+                body = driver.find_element(By.TAG_NAME, 'body')
+                body.send_keys(Keys.END * 3)
 
-            time.sleep(pause_time)
+                time.sleep(pause_time)
 
         #console.print(f"[bold #2ecc71]Done! {len(tracks)} song extracted[/bold #2ecc71]")
         return tracks
