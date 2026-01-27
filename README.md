@@ -28,6 +28,17 @@ A simple, console-based tool that:
 - Log every batch with timestamp (`logs/export_YYYY-MM-DD_HH-MM-SS.json`)
 - Auto-renames files to clean `Artist - Title.mp3` format
 
+## Preview
+
+<img width=75% alt="Képernyőkép 2026-01-24 215753" src="https://github.com/user-attachments/assets/c1c6db1c-2a8a-4cad-bff3-1c5223258022" />
+
+<details>
+  <summary>Video Preview</summary>
+  
+  https://github.com/user-attachments/assets/695af248-9cdb-4331-953f-c29b04b74fad
+  
+</details>
+
 ## Installation
 
 ### Prerequisites
