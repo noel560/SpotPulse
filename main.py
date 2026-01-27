@@ -43,6 +43,66 @@ def get_app_dir():
     else:
         return os.path.join(home, ".local", "share", APP_NAME.lower())
 
+def ensure_binaries():
+    app_dir = get_app_dir()
+    system = platform.system()
+    
+    yt_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
+    ff_name = "ffmpeg.exe" if system == "Windows" else "ffmpeg"
+    
+    yt_path = os.path.join(app_dir, yt_name)
+    ff_path = os.path.join(app_dir, ff_name)
+
+    if os.path.exists(yt_path) and os.path.exists(ff_path):
+        return yt_path, ff_path
+
+    urls = {
+        "Windows": {
+            "yt": "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+            "ff": "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v4.4.1/ffmpeg-4.4.1-win-64.zip"
+        },
+        "Linux": {
+            "yt": "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
+            "ff": "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v4.4.1/ffmpeg-4.4.1-linux-64.zip"
+        }
+    }
+
+    current_urls = urls.get(system, urls["Windows"])
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(bar_width=50, complete_style="#1DB954", finished_style="#1ed760", pulse_style="#1DB954"),
+        TextColumn("{task.percentage:>3.0f}%"),
+        console=console
+    ) as progress:
+
+        if not os.path.exists(yt_path):
+            task1 = progress.add_task("Downloading yt-dlp...", total=100)
+            r = requests.get(current_urls["yt"], stream=True)
+            with open(yt_path, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+                    progress.update(task1, advance=(len(chunk)/int(r.headers.get('content-length', 1))*100))
+            if system != "Windows": os.chmod(yt_path, 0o755)
+
+        if not os.path.exists(ff_path):
+            task2 = progress.add_task("Downloading ffmpeg...", total=100)
+            zip_path = ff_path + ".zip"
+            r = requests.get(current_urls["ff"], stream=True)
+            with open(zip_path, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+                    progress.update(task2, advance=(len(chunk)/int(r.headers.get('content-length', 1))*100))
+            
+            import zipfile
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extract(ff_name, app_dir)
+            os.remove(zip_path)
+            if system != "Windows": os.chmod(ff_path, 0o755)
+
+    return yt_path, ff_path
+
 def get_data_path():
     app_dir = get_app_dir()
     os.makedirs(app_dir, exist_ok=True)
@@ -245,16 +305,28 @@ def extract_tracks_from_playlist(playlist_url):
         no_new_added = 0
         max_no_new = 15
         pause_time = 7.0
+        total_songs = None
 
         try:
-            header_elem = driver.find_element(By.CSS_SELECTOR, 'div.eJbkaBhDfq9NfV5_QS8V, div[data-testid="playlist-header-description"], div[class*="encore-text-body-small"]')
-            header_text = header_elem.text.lower()
-            match = re.search(r'(\d+)\s*(dal|song|track|tracks)', header_text)
-            if match:
-                total_songs = int(match.group(1))
-                console.print(f"[dim]Detected playlist size: {total_songs} songs[/dim]")
-        except:
-            console.print("[dim]Playlist size not detected[/dim]")
+            elements = driver.find_elements(By.CSS_SELECTOR, 'span[data-encore-id="text"]')
+            
+            for el in elements:
+                text = el.text.lower().strip()
+                match = re.search(r'(\d+)\s*(dal|song|track|szám)', text)
+                if match:
+                    total_songs = int(match.group(1))
+                    console.print(f"[dim]Detected playlist size: {total_songs} songs[/dim]")
+                    break
+            
+            if not total_songs:
+                xpath_selector = "//span[contains(text(), 'dal') or contains(text(), 'song') or contains(text(), 'track')]"
+                el = driver.find_element(By.XPATH, xpath_selector)
+                match = re.search(r'(\d+)', el.text)
+                if match:
+                    total_songs = int(match.group(1))
+                    console.print(f"[dim]Detected playlist size (via XPath): {total_songs} songs[/dim]")
+        except Exception as e:
+            console.print(f"[dim]Playlist size detection fallback: {str(e)}[/dim]")
 
         with Progress(
             SpinnerColumn(),
@@ -332,6 +404,11 @@ def extract_tracks_from_playlist(playlist_url):
 
 def download_track(original_query, track_info):
     download_dir = get_downloads_path()
+
+    app_dir = get_app_dir()
+    system = platform.system()
+    yt_dlp_bin = os.path.join(app_dir, "yt-dlp.exe" if system == "Windows" else "yt-dlp")
+
     os.makedirs(download_dir, exist_ok=True)
 
     before_files = set(os.listdir(download_dir))
@@ -346,7 +423,8 @@ def download_track(original_query, track_info):
 
     for idx, query in enumerate(query_variations, 1):
         cmd = [
-            'yt-dlp',
+            yt_dlp_bin,
+            '--ffmpeg-location', app_dir,
             '--extract-audio',
             '--audio-format', 'mp3',
             '--audio-quality', '0',
@@ -561,6 +639,7 @@ def show_main_menu():
             break
 
 def main():
+    ensure_binaries()
     data_path = get_data_path()
     data = load_data(data_path)
     playlist = data.get("playlist", "")
