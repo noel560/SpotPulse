@@ -425,6 +425,7 @@ def download_track(original_query, track_info):
         cmd = [
             yt_dlp_bin,
             '--ffmpeg-location', app_dir,
+            '-4',
             '--extract-audio',
             '--audio-format', 'mp3',
             '--audio-quality', '0',
