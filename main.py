@@ -497,8 +497,8 @@ def check_for_updates():
         latest_version = response.text.strip()
 
         if latest_version != VERSION:
-            console.print(f"[bold #4da6ff]Új verzió elérhető: {latest_version} (jelenlegi: {VERSION})[/bold #4da6ff]")
-            confirm = Prompt.ask("[#f0f0f0]Letöltsük és frissítsük? (y/n)[/#f0f0f0]", default="y")
+            console.print(f"[bold #4da6ff]New version found: {latest_version} (current: {VERSION})[/bold #4da6ff]")
+            confirm = Prompt.ask("[#f0f0f0]Update it now? (y/n)[/#f0f0f0]", default="y")
             if confirm.lower() != "y":
                 return
 
@@ -507,12 +507,12 @@ def check_for_updates():
 
             with Progress(
                 SpinnerColumn(),
-                TextColumn("[bold blue]Frissítés letöltése..."),
+                TextColumn("[bold blue]Updating..."),
                 BarColumn(bar_width=50, complete_style="#1DB954", finished_style="#1ed760", pulse_style="#1DB954"),
                 TextColumn("{task.percentage:>3.0f}%"),
                 console=console
             ) as progress:
-                task = progress.add_task("Letöltés", total=100)
+                task = progress.add_task("Updating", total=100)
                 r = requests.get(LATEST_URL, stream=True)
                 total_length = int(r.headers.get('content-length', 0))
                 downloaded = 0
@@ -538,9 +538,9 @@ del "%~f0"
             sys.exit(0)
 
     except requests.exceptions.RequestException as e:
-        console.print(f"[#ff4d4d]Frissítés ellenőrzése sikertelen (hálózati hiba): {e}[/#ff4d4d]")
+        console.print(f"[#ff4d4d]Error while updating: {e}[/#ff4d4d]")
     except Exception as e:
-        console.print(f"[#ff4d4d]Frissítés ellenőrzése sikertelen: {e}[/#ff4d4d]")
+        console.print(f"[#ff4d4d]Error while updating: {e}[/#ff4d4d]")
 
 def show_main_menu():
     data_path = get_data_path()
