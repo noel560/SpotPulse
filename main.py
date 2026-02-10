@@ -23,8 +23,13 @@ import time
 from datetime import datetime
 import platform
 import re
+import sys
 
 console = Console()
+
+VERSION = "1.4.1"
+VERSION_URL = "https://raw.githubusercontent.com/noel560/SpotPulse/main/version.txt"
+LATEST_URL = "https://github.com/noel560/SpotPulse/releases/latest/download/SpotPulse.exe"
 
 APP_NAME = "SpotPulse"
 DEFAULT_DATA = {
@@ -482,6 +487,61 @@ def download_track(original_query, track_info):
 
     return success
 
+def check_for_updates():
+    if platform.system() != "Windows" or not getattr(sys, 'frozen', False):
+        return
+
+    try:
+        response = requests.get(VERSION_URL)
+        response.raise_for_status()
+        latest_version = response.text.strip()
+
+        if latest_version != VERSION:
+            console.print(f"[bold #4da6ff]Új verzió elérhető: {latest_version} (jelenlegi: {VERSION})[/bold #4da6ff]")
+            confirm = Prompt.ask("[#f0f0f0]Letöltsük és frissítsük? (y/n)[/#f0f0f0]", default="y")
+            if confirm.lower() != "y":
+                return
+
+            current_exe = sys.executable
+            temp_path = os.path.join(os.path.dirname(current_exe), "SpotPulse_new.exe")
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]Frissítés letöltése..."),
+                BarColumn(bar_width=50, complete_style="#1DB954", finished_style="#1ed760", pulse_style="#1DB954"),
+                TextColumn("{task.percentage:>3.0f}%"),
+                console=console
+            ) as progress:
+                task = progress.add_task("Letöltés", total=100)
+                r = requests.get(LATEST_URL, stream=True)
+                total_length = int(r.headers.get('content-length', 0))
+                downloaded = 0
+                with open(temp_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            progress.update(task, advance=(len(chunk) / total_length * 100) if total_length else 0)
+
+            batch_content = f"""@echo off
+timeout 3 >nul
+taskkill /f /im SpotPulse.exe >nul 2>&1
+move /Y "{temp_path}" "{current_exe}"
+start "" "{current_exe}"
+del "%~f0"
+"""
+            batch_path = os.path.join(os.path.dirname(current_exe), "update.bat")
+            with open(batch_path, "w") as bat:
+                bat.write(batch_content)
+
+            subprocess.Popen(batch_path, shell=True)
+            sys.exit(0)
+
+    except requests.exceptions.RequestException as e:
+        console.print(f"[#ff4d4d]Frissítés ellenőrzése sikertelen (hálózati hiba): {e}[/#ff4d4d]")
+    except Exception as e:
+        console.print(f"[#ff4d4d]Frissítés ellenőrzése sikertelen: {e}[/#ff4d4d]")
+
 def show_main_menu():
     data_path = get_data_path()
     data = load_data(data_path)
@@ -641,6 +701,7 @@ def show_main_menu():
 
 def main():
     ensure_binaries()
+    check_for_updates()
     data_path = get_data_path()
     data = load_data(data_path)
     playlist = data.get("playlist", "")
