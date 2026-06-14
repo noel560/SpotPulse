@@ -7,6 +7,7 @@ from rich.prompt import Prompt
 from rich.panel import Panel
 from rich.align import Align
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+from concurrent.futures import ThreadPoolExecutor
 import requests
 from bs4 import BeautifulSoup
 
@@ -27,7 +28,7 @@ import sys
 
 console = Console()
 
-VERSION = "1.4.1"
+VERSION = "1.5"
 VERSION_URL = "https://raw.githubusercontent.com/noel560/SpotPulse/main/version.txt"
 LATEST_URL = "https://github.com/noel560/SpotPulse/releases/latest/download/SpotPulse.exe"
 
@@ -407,26 +408,45 @@ def extract_tracks_from_playlist(playlist_url):
     finally:
         driver.quit()
 
+def make_safe_filename(text):
+    """Eltávolítja vagy lecseréli a Windows által tiltott karaktereket a fájlnévből"""
+    if not text:
+        return "Unknown"
+    text = text.replace('/', '-').replace('\\', '-').replace(':', '').replace('*', '').replace('?', '')
+    text = text.replace('"', '').replace('<', '').replace('>', '').replace('|', '')
+    return text.strip()
+
 def download_track(original_query, track_info):
     download_dir = get_downloads_path()
-
     app_dir = get_app_dir()
     system = platform.system()
     yt_dlp_bin = os.path.join(app_dir, "yt-dlp.exe" if system == "Windows" else "yt-dlp")
 
     os.makedirs(download_dir, exist_ok=True)
 
-    before_files = set(os.listdir(download_dir))
-
     query_variations = [
-        f"ytsearch:{original_query} official audio",
-        f"ytsearch5:{original_query} song",
-        f"ytsearch:{original_query.replace('Remix', '').strip()}",
+        f"ytsearch1:{original_query} official audio",
+        f"ytsearch1:{original_query}",
     ]
 
     success = False
+    temp_filename = None
 
-    for idx, query in enumerate(query_variations, 1):
+    for query in query_variations:
+        safe_artists = make_safe_filename(track_info['artists'])
+        safe_title = make_safe_filename(track_info['title'])
+        
+        new_filename = f"{safe_artists} - {safe_title}.mp3"
+        new_path = os.path.join(download_dir, new_filename)
+        counter = 1
+        while os.path.exists(new_path):
+            new_filename = f"{safe_artists} - {safe_title} ({counter}).mp3"
+            new_path = os.path.join(download_dir, new_filename)
+            counter += 1
+
+        base_temp_name = f"sp_temp_{int(time.time() * 1000)}"
+        output_template = os.path.join(download_dir, f"{base_temp_name}.%(ext)s")
+
         cmd = [
             yt_dlp_bin,
             '--ffmpeg-location', app_dir,
@@ -441,49 +461,21 @@ def download_track(original_query, track_info):
             '--playlist-end', '1',
             '--match-filter', 'duration < 600',
             '--no-overwrites',
-            '--output', os.path.join(download_dir, '%(artist)s - %(title)s.%(ext)s'),
+            '--output', output_template,
             '--restrict-filenames',
             query
         ]
 
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
-            success = True
-            break
+            
+            expected_temp_path = os.path.join(download_dir, f"{base_temp_name}.mp3")
+            if os.path.exists(expected_temp_path):
+                os.rename(expected_temp_path, new_path)
+                success = True
+                break
         except subprocess.CalledProcessError:
             continue
-
-    if not success:
-        console.print(f"[bold #ff4d4d]Failed after retries: {track_info['title']} - {track_info['artists']}[/bold #ff4d4d]")
-        return False
-
-    time.sleep(3)
-    after_files = set(os.listdir(download_dir))
-    new_files = after_files - before_files
-
-    if not new_files:
-        console.print(f"[#ff4d4d]Warning: No new file detected for {track_info['title']}[/#ff4d4d]")
-        return True
-
-    downloaded_file = list(new_files)[0]
-    old_path = os.path.join(download_dir, downloaded_file)
-
-    safe_artists = track_info['artists'].replace('/', ',').strip()
-    safe_title = track_info['title'].replace('/', '-').strip()
-    new_filename = f"{safe_artists} - {safe_title}.mp3"
-    new_path = os.path.join(download_dir, new_filename)
-
-    counter = 1
-    while os.path.exists(new_path):
-        new_filename = f"{safe_artists} - {safe_title} ({counter}).mp3"
-        new_path = os.path.join(download_dir, new_filename)
-        counter += 1
-
-    try:
-        os.rename(old_path, new_path)
-        console.print(f"[#2ecc71]Downloaded: {track_info['artists']} - {track_info['title']}[/#2ecc71]")
-    except Exception as e:
-        pass
 
     return success
 
@@ -590,7 +582,7 @@ def show_main_menu():
                 input()
                 continue
             
-            console.print("\n[bold #4da6ff]Extracting tracks from playlist...[/bold #4da6ff]")
+            # console.print("\n[bold #4da6ff]Extracting tracks from playlist...[/bold #4da6ff]")
             tracks = extract_tracks_from_playlist(playlist)
             
             if not tracks:
@@ -645,19 +637,36 @@ def show_main_menu():
             
             music_list = {}
             for track in to_download:
-                search_query = f"{track['artists']} {track['title']}"  # jobb sorrend
-                console.print(f"[#4da6ff]Downloading: {track['artists']} - {track['title']}[/#4da6ff]")
-
                 music_list[track["title"]] = {
                     "artist": track["artists"],
                     "downloaded": False
                 }
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(bar_width=50, complete_style="#1DB954", finished_style="#1ed760", pulse_style="#1DB954"),
+                TextColumn("[bold #1ed760]{task.completed}/{task.total}[/bold #1ed760] songs downloaded"),
+                TimeElapsedColumn(),
+                console=console
+            ) as progress:
                 
-                if download_track(search_query, track):
-                    success_count += 1
-                    music_list[track["title"]]["downloaded"] = True
-                else:
-                    console.print("[#ff4d4d]Failed to download this track.[/#ff4d4d]")
+                download_task = progress.add_task("Downloading songs...", total=len(to_download))
+
+                def worker(track):
+                    search_query = f"{track['artists']} {track['title']}"
+                    res = download_track(search_query, track)
+                    
+                    if res:
+                        music_list[track["title"]]["downloaded"] = True
+                    
+                    progress.advance(download_task, 1)
+                    return res
+
+                max_workers = 4
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    results = list(executor.map(worker, to_download))
+                    success_count = sum(1 for r in results if r)
 
             # Log mentés (csak a most feldolgozottakat)
             if music_list:
@@ -666,7 +675,6 @@ def show_main_menu():
                 log_file = os.path.join(logs_dir, f"export_{timestamp}.json")
                 with open(log_file, "w", encoding="utf-8") as f:
                     json.dump(music_list, f, ensure_ascii=False, indent=4)
-                #console.print(f"[dim]Log saved: export_{timestamp}.json[/dim]")
 
             # Nem .mp3 törlése
             for file in os.listdir(download_dir):
